@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KaKaAgent</title>
+  <link rel="icon" href="../../logo.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="mark"><img src="../../logo.png" alt=""></div>
+        <span>KaKaAgent</span>
+      </div>
+
+      <div class="nav-title">工作区</div>
+      <nav class="nav">
+        <button class="active" data-view="home">随便聊聊</button>
+        <button data-view="workflow">工作流库</button>
+        <button data-view="agents">智能体库</button>
+      </nav>
+
+      <div class="nav-title">最近对话</div>
+      <div class="recent-list" id="conversationList"></div>
+
+      <div class="nav-title">最近目标</div>
+      <div class="recent-list" id="recentList"></div>
+    </aside>
+
+    <main class="content">
+      <section class="view active" id="homeView">
+        <div class="home-panel">
+          <div class="home-prompt-title">你想和我聊些什么？</div>
+          <div class="feature-marquee" aria-hidden="true">
+            <div class="marquee-track track-one">
+              <span>先聊想法，再决定是否打开目录</span>
+              <span>把模糊目标整理成下一步</span>
+              <span>从当前项目沉淀公共工作流</span>
+              <span>让 Agent 先探索，再收敛路径</span>
+              <span>先聊想法，再决定是否打开目录</span>
+              <span>把模糊目标整理成下一步</span>
+              <span>从当前项目沉淀公共工作流</span>
+              <span>让 Agent 先探索，再收敛路径</span>
+            </div>
+            <div class="marquee-track track-two">
+              <span>读取本地上下文，但写入前确认</span>
+              <span>复杂任务拆成阶段和节点</span>
+              <span>不同 Agent 负责不同节点</span>
+              <span>失败会留下记录，而不是悄悄跳过</span>
+              <span>读取本地上下文，但写入前确认</span>
+              <span>复杂任务拆成阶段和节点</span>
+              <span>不同 Agent 负责不同节点</span>
+              <span>失败会留下记录，而不是悄悄跳过</span>
+            </div>
+            <div class="marquee-track track-three">
+              <span>验证流程独立运行</span>
+              <span>工作流可以跟随项目，也可以设为公共</span>
+              <span>每个阶段都有明确产物</span>
+              <span>临时对话也能转成工作区任务</span>
+              <span>验证流程独立运行</span>
+              <span>工作流可以跟随项目，也可以设为公共</span>
+              <span>每个阶段都有明确产物</span>
+              <span>临时对话也能转成工作区任务</span>
+            </div>
+          </div>
+          <form class="command-box" id="homeComposer">
+            <textarea id="homePrompt" rows="4" placeholder="描述任务、问题或想法..." autofocus></textarea>
+            <div class="command-actions">
+              <button class="primary send-button" id="startChatMain" type="submit" aria-label="发送">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M13.2 5.3 20 12l-6.8 6.7-1.7-1.7 3.9-3.8H4v-2.4h11.4L11.5 7z"/>
+                </svg>
+              </button>
+              <button class="btn" id="openFolderMain" type="button">打开目录</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="home-grid">
+          <section>
+            <div class="section-head"><span>最近目标</span><span id="recentCount">0 项</span></div>
+            <div class="list" id="recentCards"></div>
+          </section>
+          <section>
+            <div class="section-head"><span>智能体库</span><button class="link-button" data-view="agents">管理</button></div>
+            <div class="list compact" id="homeAgents"></div>
+          </section>
+          <section>
+            <div class="section-head"><span>工作流库</span><button class="link-button" data-view="workflow">管理</button></div>
+            <div class="list compact" id="homeWorkflows"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="workspaceView">
+        <div class="workbench">
+          <nav class="tabbar">
+            <button class="tab active" data-workspace-tab="chat">对话</button>
+            <button class="tab" data-workspace-tab="workflow">工作流</button>
+            <button class="tab tab-tool" id="toggleFilesButton" type="button">文件</button>
+          </nav>
+
+          <aside class="files">
+            <div class="section-head"><span>文件</span><span id="fileCount">0</span></div>
+            <div class="tree" id="fileTree"></div>
+          </aside>
+
+          <section class="chat workspace-panel active" id="workspaceChatPanel">
+            <div class="messages" id="messages"></div>
+            <div class="approval-dock" id="approvalDock"></div>
+            <form class="composer task-composer" id="composer">
+              <textarea id="messageInput" rows="3" placeholder="描述任务、问题或下一步..."></textarea>
+              <div class="composer-toolbar">
+                <div class="composer-tools">
+                  <button class="tool-button" id="attachButton" type="button" aria-label="添加附件" title="添加附件">+</button>
+                  <label class="composer-select">
+                    <span>权限</span>
+                    <select id="permissionMode">
+                      <option value="read">只读</option>
+                      <option value="confirm">确认后执行</option>
+                      <option value="auto">自动推进</option>
+                    </select>
+                  </label>
+                  <label class="composer-select">
+                    <span>模型</span>
+                    <select id="modelSelect">
+                      <option value="current">当前模型</option>
+                      <option value="glm">glm-5.2</option>
+                      <option value="gpt">gpt-4.1</option>
+                      <option value="deepseek">deepseek-chat</option>
+                      <option value="gemini">gemini-2.5-pro</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="composer-status">
+                  <span id="tokenUsage">本轮 0 / 会话 0 tokens</span>
+                  <button class="primary send-button" type="submit" aria-label="发送">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M13.2 5.3 20 12l-6.8 6.7-1.7-1.7 3.9-3.8H4v-2.4h11.4L11.5 7z"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </form>
+          </section>
+
+          <section class="workspace-panel workspace-flow-panel" id="workspaceWorkflowPanel">
+            <div class="workspace-flow-head">
+              <div>
+                <strong>当前目录工作流</strong>
+                <span>跟随当前工作区，可沉淀为公共工作流</span>
+              </div>
+              <div class="card-actions">
+                <button class="btn">设为公共</button>
+                <button class="primary">保存</button>
+              </div>
+            </div>
+            <div class="canvas-wrap workspace-canvas-wrap">
+              <div class="canvas" id="workspaceWorkflowCanvas"></div>
+            </div>
+          </section>
+
+          <aside class="inspector">
+            <div class="section-head"><span>检查器</span><span class="badge green">只读</span></div>
+            <div class="card">
+              <h3>当前目录工作流</h3>
+              <div class="flow-mini" id="workflowMini"></div>
+              <div class="card-actions">
+                <button class="btn" data-workspace-tab="workflow">编辑工作流</button>
+              </div>
+            </div>
+            <div class="card">
+              <h3>目录画像</h3>
+              <p id="folderProfile">尚未打开目录。</p>
+              <div class="profile-grid" id="folderProfileGrid"></div>
+            </div>
+            <div class="card">
+              <div class="card-title-row">
+                <h3>任务计划</h3>
+                <span class="badge amber" id="planStatus">待生成</span>
+              </div>
+              <div class="plan-list" id="taskPlan"></div>
+              <div class="card-actions">
+                <button class="primary" id="runPlan" type="button">执行第一步</button>
+                <button class="btn" id="convertWorkflow" type="button">转成工作流</button>
+              </div>
+            </div>
+            <div class="card">
+              <h3>安全</h3>
+              <p>读取允许，写入和命令执行需要确认。</p>
+            </div>
+            <div class="card session-card">
+              <div class="card-title-row">
+                <h3>会话状态</h3>
+                <span class="badge green" id="sessionMode">对话</span>
+              </div>
+              <div class="detail-row"><span>目标</span><strong id="sessionGoal">待开始</strong></div>
+              <div class="detail-row"><span>当前</span><strong id="sessionStep">待开始</strong></div>
+              <div class="detail-row"><span>验证</span><strong id="sessionVerification">未运行</strong></div>
+              <div class="session-actions">
+                <button class="btn" id="sessionToWorkflow" type="button">生成工作流</button>
+              </div>
+            </div>
+            <div class="card session-card">
+              <h3>上下文</h3>
+              <div class="session-list" id="sessionContextList"></div>
+            </div>
+            <div class="card session-card">
+              <h3>记忆</h3>
+              <div class="session-list" id="sessionMemoryList"></div>
+            </div>
+            <div class="card session-card">
+              <h3>Skills</h3>
+              <div class="session-list" id="sessionSkillList"></div>
+            </div>
+            <div class="card session-card">
+              <h3>产物</h3>
+              <div class="session-list" id="sessionArtifactList"></div>
+            </div>
+            <div class="card session-card">
+              <h3>审批与工具</h3>
+              <div class="session-list" id="sessionToolList"></div>
+            </div>
+          </aside>
+
+          <footer class="console">
+            <div>
+              <h3>权限</h3>
+              <div class="log"><time>默认</time><span>读取目录。</span></div>
+            </div>
+            <div>
+              <h3>日志</h3>
+              <div id="runLog"></div>
+            </div>
+            <div>
+              <h3>验证</h3>
+              <div id="verifyLog">
+                <div class="log"><time>待运行</time><span>独立上下文、产物证据、失败处理。</span></div>
+              </div>
+            </div>
+          </footer>
+        </div>
+      </section>
+
+      <section class="view" id="workflowView">
+        <div class="workflow-layout">
+          <aside class="workflow-library">
+            <div class="workflow-library-head">
+              <span>工作流</span>
+              <button class="primary workflow-new" id="createWorkflowButton" type="button">新建</button>
+            </div>
+            <div class="workflow-search">
+              <input id="workflowSearch" placeholder="搜索工作流">
+            </div>
+            <div class="workflow-list" id="workflowList"></div>
+          </aside>
+          <section class="workflow-main">
+            <div class="workflow-toolbar">
+              <div>
+                <strong id="workflowTitle">通用任务流</strong>
+                <span id="workflowSubtitle">对话、规划、执行、验证</span>
+              </div>
+              <div class="workflow-actions">
+                <button class="btn" id="duplicateWorkflowButton" type="button">复制</button>
+                <button class="btn" id="publishWorkflowButton" type="button">设为公共</button>
+                <button class="primary" id="saveWorkflowButton" type="button">保存</button>
+              </div>
+            </div>
+            <div class="canvas-wrap workflow-canvas-shell">
+              <div class="canvas-controls" aria-label="画布工具">
+                <button class="icon" type="button" title="适应画布">⌖</button>
+                <button class="icon" type="button" title="缩小">−</button>
+                <span>100%</span>
+                <button class="icon" type="button" title="放大">+</button>
+              </div>
+              <div class="canvas" id="workflowCanvas"></div>
+            </div>
+            <form class="workflow-composer" id="workflowComposer">
+              <div class="workflow-input-row">
+                <div id="workflowInput" class="workflow-rich-input" contenteditable="true" data-placeholder="说说你想怎么调整这个流程..."></div>
+                <div class="workflow-mention-menu" id="workflowMentionMenu"></div>
+                <button class="primary send-button" type="submit" aria-label="发送">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M13.2 5.3 20 12l-6.8 6.7-1.7-1.7 3.9-3.8H4v-2.4h11.4L11.5 7z"/>
+                  </svg>
+                </button>
+              </div>
+            </form>
+          </section>
+          <aside class="workflow-inspector">
+            <div class="card">
+              <h3>工作流详情</h3>
+              <div class="detail-row"><span>范围</span><strong id="selectedWorkflowScope">公共</strong></div>
+              <div class="detail-row"><span>节点数</span><strong id="selectedWorkflowNodeCount">0</strong></div>
+              <div class="detail-row"><span>状态</span><strong id="selectedWorkflowStatus">启用</strong></div>
+            </div>
+            <div class="card">
+              <h3>当前节点</h3>
+              <div class="detail-row"><span>节点</span><strong id="selectedNodeName">确认任务</strong></div>
+              <div class="detail-row"><span>类型</span><strong id="selectedNodeKind">AI 提示词</strong></div>
+              <div class="node-kind-toggle" id="selectedNodeKindToggle" aria-label="节点类型">
+                <button type="button" data-node-kind="ai">AI 提示词</button>
+                <button type="button" data-node-kind="js">JS 脚本</button>
+              </div>
+              <div class="detail-row"><span>Agent</span><strong id="selectedNodeAgent">规划器</strong></div>
+              <div class="detail-row"><span>输入</span><strong>用户请求、目录摘要</strong></div>
+              <div class="detail-row"><span>输出</span><strong>任务范围、产物清单</strong></div>
+              <div class="detail-row"><span>权限</span><strong>只读</strong></div>
+            </div>
+            <div class="card">
+              <h3>规则</h3>
+              <div class="rule-line"><span>写入前确认</span><span class="badge green">启用</span></div>
+              <div class="rule-line"><span>验证上下文隔离</span><span class="badge green">启用</span></div>
+              <div class="rule-line"><span>失败进入记录</span><span class="badge green">启用</span></div>
+              <div class="rule-line"><span>删除文件</span><span class="badge amber">禁止</span></div>
+            </div>
+            <div class="card">
+              <h3>触发条件</h3>
+              <ul>
+                <li>任务超过 2 个文件时生成计划</li>
+                <li>涉及写入时进入确认节点</li>
+                <li>验证失败时进入失败处理</li>
+                <li>需求不明确时暂停并提问</li>
+              </ul>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="agentsView">
+        <div class="agents-page">
+          <div class="agents-toolbar">
+            <div>
+              <strong>智能体库</strong>
+              <span>定义角色、职责、驱动引擎和权限边界</span>
+            </div>
+            <button class="btn">新建智能体</button>
+          </div>
+          <div class="engine-grid" id="agentEngineGrid"></div>
+          <div class="agents-grid" id="agentsGrid"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "kakaagent",
+  "version": "0.1.0",
+  "description": "A general desktop Agent workbench with per-folder workflows.",
+  "main": "src/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^31.7.7"
+  }
+}
