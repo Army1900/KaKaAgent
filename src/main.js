@@ -1,39 +1,315 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const fs = require('fs/promises');
 const path = require('path');
 const nodeFs = require('fs');
+const {
+  buildDirectoryDigest,
+  createEngineHandoffPlan,
+  createEngineInitPlan,
+  getEngineById,
+  getEngineRegistry,
+  normalizeEngineHandoffResult,
+  normalizeSessionSettings,
+  runIndependentVerification,
+  sanitizeModelContext,
+  selectDirectoryContext,
+  validateCommandProposal
+} = require('./core/session-core');
 
 let mainWindow;
 const rootDir = path.join(__dirname, '..');
 
 function getStatePath() {
-  return path.join(app.getPath('userData'), 'state.json');
+  return path.join(getWorkspaceRoot(), 'state.json');
+}
+
+function getWorkspaceRoot() {
+  return path.join(app.getPath('home'), '.kakaAgent');
+}
+
+function getWorkspacePaths() {
+  const root = getWorkspaceRoot();
+  return {
+    root,
+    conversations: path.join(root, 'conversations'),
+    projects: path.join(root, 'projects'),
+    workflows: path.join(root, 'workflows'),
+    agents: path.join(root, 'agents'),
+    skills: path.join(root, 'skills'),
+    cache: path.join(root, 'cache'),
+    settings: path.join(root, 'settings.json'),
+    projectsIndex: path.join(root, 'projects', 'index.json'),
+    workflowsIndex: path.join(root, 'workflows', 'index.json'),
+    agentsIndex: path.join(root, 'agents', 'index.json')
+  };
+}
+
+function ensureWorkspace() {
+  const paths = getWorkspacePaths();
+  [
+    paths.root,
+    paths.conversations,
+    paths.projects,
+    paths.workflows,
+    paths.agents,
+    paths.skills,
+    paths.cache
+  ].forEach((dirPath) => nodeFs.mkdirSync(dirPath, { recursive: true }));
+  if (!nodeFs.existsSync(paths.settings)) {
+    nodeFs.writeFileSync(paths.settings, JSON.stringify(normalizeSessionSettings({
+      layout: 'home-dot-directory',
+      createdAt: new Date().toISOString()
+    }), null, 2), 'utf8');
+  }
+  if (!nodeFs.existsSync(paths.projectsIndex)) nodeFs.writeFileSync(paths.projectsIndex, '[]', 'utf8');
+  if (!nodeFs.existsSync(paths.workflowsIndex)) nodeFs.writeFileSync(paths.workflowsIndex, '[]', 'utf8');
+  if (!nodeFs.existsSync(paths.agentsIndex)) nodeFs.writeFileSync(paths.agentsIndex, '[]', 'utf8');
+  return paths;
+}
+
+function readSettings() {
+  const paths = ensureWorkspace();
+  return normalizeSessionSettings(readJsonFile(paths.settings, {}));
+}
+
+function saveSettings(settings) {
+  const paths = ensureWorkspace();
+  const safeSettings = normalizeSessionSettings({
+    ...readSettings(),
+    ...(settings || {})
+  });
+  nodeFs.writeFileSync(paths.settings, JSON.stringify(safeSettings, null, 2), 'utf8');
+  return safeSettings;
+}
+
+function safeFileName(value, fallback = 'item') {
+  return String(value || fallback).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').slice(0, 96);
+}
+
+function readJsonFile(filePath, fallback) {
+  try {
+    return JSON.parse(nodeFs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return fallback;
+  }
 }
 
 function readAppState() {
   try {
+    ensureWorkspace();
     const content = nodeFs.readFileSync(getStatePath(), 'utf8');
     const parsed = JSON.parse(content);
     return {
       conversations: Array.isArray(parsed.conversations) ? parsed.conversations : [],
       recentProjects: Array.isArray(parsed.recentProjects) ? parsed.recentProjects : [],
+      agents: Array.isArray(parsed.agents) ? parsed.agents : [],
       workflows: Array.isArray(parsed.workflows) ? parsed.workflows : []
     };
   } catch {
-    return { conversations: [], recentProjects: [], workflows: [] };
+    ensureWorkspace();
+    return { conversations: [], recentProjects: [], agents: [], workflows: [] };
   }
 }
 
 function saveAppState(state) {
+  const workspace = ensureWorkspace();
   const safeState = {
     conversations: Array.isArray(state.conversations) ? state.conversations.slice(0, 40) : [],
     recentProjects: Array.isArray(state.recentProjects) ? state.recentProjects.slice(0, 20) : [],
+    agents: Array.isArray(state.agents) ? state.agents.slice(0, 80) : [],
     workflows: Array.isArray(state.workflows) ? state.workflows.slice(0, 40) : []
   };
   nodeFs.mkdirSync(path.dirname(getStatePath()), { recursive: true });
   nodeFs.writeFileSync(getStatePath(), JSON.stringify(safeState, null, 2), 'utf8');
+  writeWorkspaceState(workspace, safeState);
   return safeState;
+}
+
+function writeWorkspaceState(workspace, safeState) {
+  safeState.conversations.forEach((conversation) => {
+    const conversationDir = path.join(workspace.conversations, safeFileName(conversation.id, 'conversation'));
+    nodeFs.mkdirSync(path.join(conversationDir, 'files'), { recursive: true });
+    nodeFs.mkdirSync(path.join(conversationDir, 'artifacts'), { recursive: true });
+    nodeFs.mkdirSync(path.join(conversationDir, 'workflows'), { recursive: true });
+    nodeFs.writeFileSync(path.join(conversationDir, 'messages.json'), JSON.stringify(conversation, null, 2), 'utf8');
+  });
+  const projects = safeState.recentProjects.map((project) => ({
+    id: project.id || safeFileName(project.path || project.name, 'project'),
+    name: project.name || path.basename(project.path || ''),
+    path: project.path,
+    lastOpenedAt: project.lastOpenedAt || new Date().toISOString()
+  })).filter((project) => project.path);
+  nodeFs.writeFileSync(workspace.projectsIndex, JSON.stringify(projects, null, 2), 'utf8');
+  nodeFs.writeFileSync(workspace.agentsIndex, JSON.stringify(safeState.agents, null, 2), 'utf8');
+  nodeFs.writeFileSync(workspace.workflowsIndex, JSON.stringify(safeState.workflows, null, 2), 'utf8');
+}
+
+function getWorkspaceInfo() {
+  const paths = ensureWorkspace();
+  return {
+    root: paths.root,
+    conversationsDir: paths.conversations,
+    projectsDir: paths.projects,
+    workflowsDir: paths.workflows,
+    agentsDir: paths.agents,
+    cacheDir: paths.cache,
+    skillsDir: paths.skills,
+    projects: readJsonFile(paths.projectsIndex, []),
+    agents: readJsonFile(paths.agentsIndex, []),
+    workflows: readJsonFile(paths.workflowsIndex, [])
+  };
+}
+
+async function initializeProjectEngine(payload = {}) {
+  const projectPath = path.resolve(String(payload.projectPath || ''));
+  const rootPath = path.resolve(String(payload.projectPath || ''));
+  if (!projectPath || !nodeFs.existsSync(projectPath)) {
+    return { ok: false, error: '项目目录不存在' };
+  }
+  const stats = nodeFs.statSync(projectPath);
+  if (!stats.isDirectory()) {
+    return { ok: false, error: '目标不是目录' };
+  }
+
+  const plan = createEngineInitPlan({
+    engineId: payload.engineId,
+    projectPath,
+    goal: payload.goal,
+    skills: payload.skills
+  });
+  const written = [];
+  const skipped = [];
+
+  for (const file of plan.files) {
+    const targetPath = path.resolve(projectPath, file.relativePath);
+    if (!targetPath.startsWith(`${rootPath}${path.sep}`) && targetPath !== rootPath) {
+      return { ok: false, error: `路径越界：${file.relativePath}` };
+    }
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    if (nodeFs.existsSync(targetPath) && !payload.overwrite) {
+      skipped.push({ ...file, path: targetPath, reason: '已存在' });
+      continue;
+    }
+    await fs.writeFile(targetPath, file.content, 'utf8');
+    written.push({ ...file, path: targetPath });
+  }
+
+  return {
+    ok: true,
+    engine: plan.engine,
+    projectPath,
+    written,
+    skipped,
+    summary: plan.summary
+  };
+}
+
+async function createEngineHandoff(payload = {}) {
+  const projectPath = String(payload.projectPath || '').trim();
+  const workspacePath = String(payload.workspacePath || '').trim();
+  const targetRoot = projectPath || workspacePath;
+  if (!targetRoot) return { ok: false, error: '缺少交接目标目录' };
+
+  const resolvedRoot = path.resolve(targetRoot);
+  await fs.mkdir(resolvedRoot, { recursive: true });
+  const plan = createEngineHandoffPlan({
+    engineId: payload.engineId,
+    goal: payload.goal,
+    projectPath,
+    contextSummary: payload.contextSummary,
+    skills: payload.skills,
+    constraints: payload.constraints,
+    validation: payload.validation,
+    nextActions: payload.nextActions
+  });
+  const targetPath = path.resolve(resolvedRoot, plan.relativePath);
+  if (!targetPath.startsWith(`${resolvedRoot}${path.sep}`)) {
+    return { ok: false, error: `路径越界：${plan.relativePath}` };
+  }
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, plan.content, 'utf8');
+  return {
+    ok: true,
+    engine: plan.engine,
+    relativePath: plan.relativePath,
+    path: targetPath,
+    suggestedCommand: plan.suggestedCommand,
+    summary: plan.summary
+  };
+}
+
+function checkEngineAvailability(engineId) {
+  const engine = getEngineById(engineId);
+  if (engine.type === 'builtin') {
+    return Promise.resolve({
+      ok: true,
+      engine,
+      status: 'available',
+      version: 'built-in'
+    });
+  }
+  if (!engine.command) {
+    return Promise.resolve({
+      ok: false,
+      engine,
+      status: 'missing-command',
+      error: '未配置命令'
+    });
+  }
+
+  return new Promise((resolve) => {
+    execFile(engine.command, ['--version'], {
+      timeout: 10000,
+      windowsHide: true,
+      maxBuffer: 256 * 1024
+    }, (error, stdout, stderr) => {
+      if (error) {
+        resolve({
+          ok: false,
+          engine,
+          status: 'not-found',
+          error: error.message
+        });
+        return;
+      }
+      resolve({
+        ok: true,
+        engine,
+        status: 'available',
+        version: String(stdout || stderr || '').trim().slice(0, 300) || 'available'
+      });
+    });
+  });
+}
+
+async function importEngineHandoffResult(payload = {}) {
+  const engineId = payload.engineId;
+  let filePath = payload.filePath;
+  if (!filePath) {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '导入引擎结果',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Result files', extensions: ['md', 'txt', 'json', 'log'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    filePath = result.filePaths[0];
+  }
+  const stats = await fs.stat(filePath);
+  if (!stats.isFile()) return { ok: false, error: '请选择结果文件' };
+  if (stats.size > 1024 * 1024) return { ok: false, error: '结果文件超过 1MB，第一版先不导入' };
+  const content = await fs.readFile(filePath, 'utf8');
+  return {
+    ok: true,
+    result: normalizeEngineHandoffResult({
+      engineId,
+      filePath,
+      content
+    })
+  };
 }
 
 async function listSkills() {
@@ -104,30 +380,8 @@ function runCommand({ command, cwd }) {
 }
 
 function validateCommand(command, cwd) {
-  const value = String(command || '').trim();
-  if (!value) return { ok: false, error: '命令为空' };
-  if (value.length > 240) return { ok: false, error: '命令过长' };
-  if (/[;&|<>`]/.test(value)) return { ok: false, error: '第一版暂不支持链式命令、管道或重定向' };
-  const lower = value.toLowerCase();
-  const dangerous = ['rm ', 'del ', 'rmdir ', 'format ', 'shutdown', 'git reset', 'git clean', 'remove-item', 'set-executionpolicy'];
-  if (dangerous.some((token) => lower.includes(token))) return { ok: false, error: '危险命令已拦截' };
-
-  const allowedPrefixes = [
-    'git status',
-    'git diff',
-    'git log',
-    'npm test',
-    'npm run',
-    'node --check',
-    'node -v',
-    'npm -v',
-    'python --version',
-    'py --version'
-  ];
-  if (!allowedPrefixes.some((prefix) => lower === prefix || lower.startsWith(`${prefix} `))) {
-    return { ok: false, error: '命令不在第一版白名单内' };
-  }
-
+  const validation = validateCommandProposal(command);
+  if (!validation.ok) return validation;
   const resolvedCwd = path.resolve(cwd || rootDir);
   return { ok: true, cwd: resolvedCwd };
 }
@@ -210,6 +464,71 @@ async function scanDirectory(rootPath) {
       hasGit: names.has('.git')
     }
   };
+}
+
+async function readProjectContext(payload = {}) {
+  const rootPath = String(payload.rootPath || '');
+  if (!rootPath) return { ok: false, error: '缺少目录路径' };
+  const folder = await scanDirectory(rootPath);
+  const selection = selectDirectoryContext({
+    folder,
+    text: payload.text || '',
+    limit: payload.limit || 6
+  });
+  const files = [];
+
+  for (const entry of selection.files) {
+    const safePath = resolveInsideRoot(rootPath, entry.path);
+    if (!safePath.ok) continue;
+    const file = await readTextFilePreview(rootPath, safePath.path);
+    if (file) files.push(file);
+  }
+
+  return {
+    ok: true,
+    folder,
+    selection,
+    files,
+    digest: buildDirectoryDigest({ folder, files })
+  };
+}
+
+function resolveInsideRoot(rootPath, targetPath) {
+  const root = path.resolve(rootPath);
+  const target = path.resolve(targetPath);
+  const relative = path.relative(root, target);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    return { ok: false, error: '路径不在目录内' };
+  }
+  return { ok: true, path: target };
+}
+
+async function readTextFilePreview(rootPath, filePath) {
+  try {
+    const stat = await fs.stat(filePath);
+    if (!stat.isFile() || stat.size > 512 * 1024) return null;
+    const buffer = await fs.readFile(filePath);
+    if (buffer.includes(0)) return null;
+    const content = buffer.toString('utf8').slice(0, 6000);
+    const relativePath = path.relative(rootPath, filePath);
+    return {
+      name: path.basename(filePath),
+      path: filePath,
+      relativePath,
+      size: stat.size,
+      truncated: buffer.length > 6000,
+      content,
+      summary: summarizeFileContent(content, relativePath)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function summarizeFileContent(content, relativePath) {
+  const text = String(content || '').replace(/\s+/g, ' ').trim();
+  if (!text) return `${relativePath} 为空文件`;
+  return text.length > 120 ? `${text.slice(0, 120)}...` : text;
 }
 
 async function readEntries(dirPath, depth, maxDepth) {
@@ -324,8 +643,9 @@ function buildTaskAnalysisPrompt(payload) {
   const folder = payload.folder
     ? `当前目录画像：${JSON.stringify(payload.folder.summary)}，目录名：${payload.folder.name}`
     : '当前没有绑定目录。';
-  const context = payload.context
-    ? `\n会话上下文：${JSON.stringify(payload.context)}`
+  const safeContext = payload.context ? sanitizeModelContext(payload.context) : null;
+  const context = safeContext
+    ? `\n会话上下文：${JSON.stringify(safeContext)}`
     : '';
   return `你是 KaKaAgent 的任务理解器。请只输出 JSON，不要 Markdown。
 用户输入：${payload.text}
@@ -358,6 +678,8 @@ ${context}
 - 只有当用户明确需要运行、测试、检查、构建、git 状态、语法检查时，才返回 toolProposals。
 - toolProposals 只允许建议这些命令前缀：git status、git diff、git log、npm test、npm run、node --check、node -v、npm -v、python --version、py --version。
 - toolProposals 只是待审批提案，不代表已经执行。不要建议删除、重置、清空、链式命令、管道或重定向。
+- 如果上下文里有 engine，它代表当前会话的执行引擎。外部 CLI 引擎只能作为可托管执行器提出计划或命令提案，不要声称已经调用。
+- KaKaAgent 的目标是把会话探索沉淀成可验证、可复用工作流；当用户讨论方法、流程、复用、自动化时，要帮助积累工作流素材。
 - 验证步骤必须独立上下文，不继承执行 Agent 的会话记忆。
 - reply 不要解释分类，不要说“我判断这是...”，不要像系统提示。直接回应用户，语气自然、简洁、像优秀 AI 助手。`;
 }
@@ -468,14 +790,22 @@ ipcMain.handle('fs:scan-folder', async (_event, folderPath) => {
   return scanDirectory(folderPath);
 });
 
+ipcMain.handle('fs:read-project-context', async (_event, payload) => {
+  return readProjectContext(payload || {});
+});
+
 ipcMain.handle('app:get-startup-context', async () => {
   const saved = readAppState();
   return {
     cwd: process.cwd(),
+    workspace: getWorkspaceInfo(),
+    settings: readSettings(),
+    engines: getEngineRegistry(),
     model: getSafeModelConfig(),
     skills: await listSkills(),
     recent: saved.recentProjects,
     conversations: saved.conversations,
+    agents: saved.agents,
     workflows: saved.workflows
   };
 });
@@ -484,12 +814,48 @@ ipcMain.handle('app:save-state', async (_event, state) => {
   return saveAppState(state || {});
 });
 
+ipcMain.handle('app:get-settings', async () => {
+  return readSettings();
+});
+
+ipcMain.handle('app:save-settings', async (_event, settings) => {
+  return saveSettings(settings || {});
+});
+
+ipcMain.handle('app:get-workspace-info', async () => {
+  return getWorkspaceInfo();
+});
+
+ipcMain.handle('engine:init-project', async (_event, payload) => {
+  return initializeProjectEngine(payload || {});
+});
+
+ipcMain.handle('engine:create-handoff', async (_event, payload) => {
+  return createEngineHandoff(payload || {});
+});
+
+ipcMain.handle('engine:import-handoff-result', async (_event, payload) => {
+  return importEngineHandoffResult(payload || {});
+});
+
+ipcMain.handle('engine:check', async (_event, engineId) => {
+  return checkEngineAvailability(engineId);
+});
+
 ipcMain.handle('skills:list', async () => {
   return listSkills();
 });
 
 ipcMain.handle('command:run', async (_event, payload) => {
   return runCommand(payload || {});
+});
+
+ipcMain.handle('command:validate', async (_event, command) => {
+  return validateCommandProposal(command);
+});
+
+ipcMain.handle('verification:independent', async (_event, payload) => {
+  return runIndependentVerification(payload || {});
 });
 
 ipcMain.handle('model:test', async () => {

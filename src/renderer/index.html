@@ -20,6 +20,7 @@
         <button class="active" data-view="home">随便聊聊</button>
         <button data-view="workflow">工作流库</button>
         <button data-view="agents">智能体库</button>
+        <button data-view="settings">设置</button>
       </nav>
 
       <div class="nav-title">最近对话</div>
@@ -98,17 +99,28 @@
         <div class="workbench">
           <nav class="tabbar">
             <button class="tab active" data-workspace-tab="chat">对话</button>
+            <button class="tab" data-workspace-tab="files" type="button">文件</button>
             <button class="tab" data-workspace-tab="workflow">工作流</button>
-            <button class="tab tab-tool" id="toggleFilesButton" type="button">文件</button>
           </nav>
 
-          <aside class="files">
-            <div class="section-head"><span>文件</span><span id="fileCount">0</span></div>
+          <section class="workspace-panel files files-panel" id="workspaceFilesPanel">
+            <div class="files-head">
+              <div>
+                <strong>文件</strong>
+                <span>当前会话可用的临时目录和目标目录</span>
+              </div>
+              <span id="fileCount">0</span>
+            </div>
+            <div class="file-sources" id="fileSources"></div>
+            <div class="evidence-box" id="evidenceBox"></div>
             <div class="tree" id="fileTree"></div>
-          </aside>
+          </section>
 
           <section class="chat workspace-panel active" id="workspaceChatPanel">
-            <div class="messages" id="messages"></div>
+            <div class="conversation-body">
+              <div class="messages" id="messages"></div>
+              <div class="thought-scroll" id="thoughtScroll" aria-hidden="true"></div>
+            </div>
             <div class="approval-dock" id="approvalDock"></div>
             <form class="composer task-composer" id="composer">
               <textarea id="messageInput" rows="3" placeholder="描述任务、问题或下一步..."></textarea>
@@ -121,6 +133,12 @@
                       <option value="read">只读</option>
                       <option value="confirm">确认后执行</option>
                       <option value="auto">自动推进</option>
+                    </select>
+                  </label>
+                  <label class="composer-select">
+                    <span>引擎</span>
+                    <select id="engineSelect">
+                      <option value="kaka">KaKa 内置</option>
                     </select>
                   </label>
                   <label class="composer-select">
@@ -154,75 +172,132 @@
               </div>
               <div class="card-actions">
                 <button class="btn">设为公共</button>
+                <button class="btn" id="initEngineButton" type="button">初始化目录</button>
                 <button class="primary">保存</button>
               </div>
             </div>
-            <div class="canvas-wrap workspace-canvas-wrap">
+            <div class="canvas-wrap workflow-canvas-shell workspace-workflow-shell" data-workflow-surface="workspace">
+              <div class="canvas-controls" aria-label="画布工具">
+                <button class="icon" type="button" title="适应画布">⌖</button>
+                <button class="icon" type="button" title="缩小">−</button>
+                <span>100%</span>
+                <button class="icon" type="button" title="放大">+</button>
+              </div>
               <div class="canvas" id="workspaceWorkflowCanvas"></div>
             </div>
           </section>
 
-          <aside class="inspector">
-            <div class="section-head"><span>检查器</span><span class="badge green">只读</span></div>
-            <div class="card">
-              <h3>当前目录工作流</h3>
-              <div class="flow-mini" id="workflowMini"></div>
-              <div class="card-actions">
-                <button class="btn" data-workspace-tab="workflow">编辑工作流</button>
+          <aside class="inspector" id="workspaceInspector">
+            <button class="inspector-toggle" id="toggleInspectorButton" type="button" aria-label="隐藏上下文栏" title="隐藏上下文栏">›</button>
+            <div class="section-head inspector-head"><span>上下文</span><span class="badge amber" id="workflowReadinessBadge">未就绪</span></div>
+
+            <details class="inspector-stage active" id="inspectorStageChat" data-inspector-stage="chat" open>
+              <summary>
+                <span>对话</span>
+                <strong id="chatStageSummary">等待目标</strong>
+              </summary>
+              <div class="stage-progress"><span id="workflowReadinessBar"></span></div>
+              <div class="stage-body">
+                <div class="card session-card inspector-primary workflow-material-card">
+                  <div class="card-title-row">
+                    <h3>沉淀进度</h3>
+                    <span class="badge green" id="sessionMode">对话</span>
+                  </div>
+                  <div class="detail-row"><span>就绪度</span><strong id="workflowReadinessText">0 / 5</strong></div>
+                  <div class="readiness-gaps" id="workflowReadinessGaps"></div>
+                  <div class="session-actions">
+                    <button class="btn" id="handoffEngineButton" type="button">交给引擎</button>
+                    <button class="btn" id="importHandoffResultButton" type="button">导入结果</button>
+                    <button class="primary" id="sessionToWorkflow" type="button" disabled>生成工作流</button>
+                  </div>
+                </div>
+
+                <div class="card workflow-material-card goal-state-card">
+                  <div class="card-title-row">
+                    <h3>目标</h3>
+                    <span class="badge amber" id="goalStateBadge">草稿</span>
+                  </div>
+                  <p id="workflowMaterialGoal">继续聊天后自动沉淀。</p>
+                  <div class="goal-mini-list" id="goalAcceptanceList"></div>
+                  <div class="goal-actions">
+                    <button class="btn" id="lockGoalButton" type="button">锁定目标</button>
+                    <button class="btn" id="markGoalDoneButton" type="button">标记完成</button>
+                  </div>
+                </div>
+
+                <div class="card workflow-material-card">
+                  <h3>输入</h3>
+                  <div class="session-list" id="workflowMaterialInputs"></div>
+                </div>
+
+                <div class="card inspector-plan" id="planCard">
+                  <div class="card-title-row">
+                    <h3>阶段</h3>
+                    <span class="badge amber" id="planStatus">待沉淀</span>
+                  </div>
+                  <div class="plan-list" id="taskPlan"></div>
+                </div>
+
+                <div class="card workflow-material-card">
+                  <h3>节点候选</h3>
+                  <div class="session-list" id="workflowMaterialNodes"></div>
+                </div>
+
+                <div class="card workflow-material-card">
+                  <h3>约束</h3>
+                  <div class="session-list" id="workflowMaterialConstraints"></div>
+                </div>
+
+                <div class="card workflow-material-card">
+                  <h3>验证规则</h3>
+                  <div class="session-list" id="workflowMaterialValidation"></div>
+                </div>
+
+                <details class="card session-card inspector-details" id="inspectorDetails">
+                  <summary>更多细节</summary>
+                  <div class="detail-row"><span>目录</span><strong id="sessionFolder">未绑定</strong></div>
+                  <div class="detail-row"><span>引擎</span><strong id="sessionEngine">KaKa 内置</strong></div>
+                  <div class="detail-row"><span>权限</span><strong id="sessionPermission">只读</strong></div>
+                  <div class="detail-row"><span>上下文</span><strong id="sessionContextSummary">0 / 6.0k</strong></div>
+                  <div class="session-list" id="sessionToolList"></div>
+                </details>
               </div>
-            </div>
-            <div class="card">
-              <h3>目录画像</h3>
-              <p id="folderProfile">尚未打开目录。</p>
-              <div class="profile-grid" id="folderProfileGrid"></div>
-            </div>
-            <div class="card">
-              <div class="card-title-row">
-                <h3>任务计划</h3>
-                <span class="badge amber" id="planStatus">待生成</span>
+            </details>
+
+            <details class="inspector-stage" id="inspectorStageFiles" data-inspector-stage="files">
+              <summary>
+                <span>文件证据</span>
+                <strong id="filesStageSummary">暂无证据</strong>
+              </summary>
+              <div class="stage-progress evidence"><span id="filesStageBar"></span></div>
+              <div class="stage-body">
+                <div class="card workflow-material-card">
+                  <h3>上下文</h3>
+                  <div class="session-list" id="fileStageContext"></div>
+                </div>
+                <div class="card workflow-material-card">
+                  <h3>证据摘要</h3>
+                  <div class="session-list" id="fileStageEvidence"></div>
+                </div>
               </div>
-              <div class="plan-list" id="taskPlan"></div>
-              <div class="card-actions">
-                <button class="primary" id="runPlan" type="button">执行第一步</button>
-                <button class="btn" id="convertWorkflow" type="button">转成工作流</button>
+            </details>
+
+            <details class="inspector-stage" id="inspectorStageWorkflow" data-inspector-stage="workflow">
+              <summary>
+                <span>工作流形态</span>
+                <strong id="workflowStageSummary">尚未生成</strong>
+              </summary>
+              <div class="stage-progress workflow"><span id="workflowStageBar"></span></div>
+              <div class="stage-body">
+                <div class="card inspector-workflow" id="workflowMiniCard">
+                  <h3>工作流草稿</h3>
+                  <div class="flow-mini" id="workflowMini"></div>
+                  <div class="card-actions">
+                    <button class="btn" data-workspace-tab="workflow">编辑工作流</button>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="card">
-              <h3>安全</h3>
-              <p>读取允许，写入和命令执行需要确认。</p>
-            </div>
-            <div class="card session-card">
-              <div class="card-title-row">
-                <h3>会话状态</h3>
-                <span class="badge green" id="sessionMode">对话</span>
-              </div>
-              <div class="detail-row"><span>目标</span><strong id="sessionGoal">待开始</strong></div>
-              <div class="detail-row"><span>当前</span><strong id="sessionStep">待开始</strong></div>
-              <div class="detail-row"><span>验证</span><strong id="sessionVerification">未运行</strong></div>
-              <div class="session-actions">
-                <button class="btn" id="sessionToWorkflow" type="button">生成工作流</button>
-              </div>
-            </div>
-            <div class="card session-card">
-              <h3>上下文</h3>
-              <div class="session-list" id="sessionContextList"></div>
-            </div>
-            <div class="card session-card">
-              <h3>记忆</h3>
-              <div class="session-list" id="sessionMemoryList"></div>
-            </div>
-            <div class="card session-card">
-              <h3>Skills</h3>
-              <div class="session-list" id="sessionSkillList"></div>
-            </div>
-            <div class="card session-card">
-              <h3>产物</h3>
-              <div class="session-list" id="sessionArtifactList"></div>
-            </div>
-            <div class="card session-card">
-              <h3>审批与工具</h3>
-              <div class="session-list" id="sessionToolList"></div>
-            </div>
+            </details>
           </aside>
 
           <footer class="console">
@@ -334,12 +409,81 @@
           <div class="agents-toolbar">
             <div>
               <strong>智能体库</strong>
-              <span>定义角色、职责、驱动引擎和权限边界</span>
+              <span>管理可复用的执行角色，引擎只是智能体的驱动方式</span>
             </div>
-            <button class="btn">新建智能体</button>
+            <button class="primary" id="createAgentButton" type="button">新建智能体</button>
           </div>
-          <div class="engine-grid" id="agentEngineGrid"></div>
-          <div class="agents-grid" id="agentsGrid"></div>
+          <div class="agents-layout">
+            <section class="agents-list-panel">
+              <div class="agents-filter">
+                <button class="active" type="button">全部</button>
+                <button type="button">内置</button>
+                <button type="button">外部</button>
+              </div>
+              <div class="agents-list" id="agentsGrid"></div>
+            </section>
+            <aside class="agent-detail" id="agentDetail"></aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="settingsView">
+        <div class="settings-page">
+          <div class="settings-head">
+            <strong>设置</strong>
+            <span>会话可以由不同引擎驱动，KaKa 负责规则、Skill 和工作流沉淀。</span>
+          </div>
+
+          <section class="settings-panel">
+            <div class="settings-row">
+              <div>
+                <strong>默认会话引擎</strong>
+                <span>新对话默认使用哪个执行引擎。</span>
+              </div>
+              <select id="defaultEngineSelect"></select>
+            </div>
+            <div class="settings-row">
+              <div>
+                <strong>Skill 加载</strong>
+                <span>项目 Skill 优先，公共 Skill 作为补充。</span>
+              </div>
+              <select id="skillScopeSelect">
+                <option value="project-first">项目优先</option>
+                <option value="public-only">仅公共</option>
+                <option value="project-only">仅项目</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <div>
+                <strong>工作流沉淀</strong>
+                <span>从会话素材生成工作流的触发方式。</span>
+              </div>
+              <select id="workflowDistillationSelect">
+                <option value="manual">手动生成</option>
+                <option value="suggest">就绪时建议</option>
+                <option value="auto-draft">自动草稿</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <div>
+                <strong>目录初始化</strong>
+                <span>打开项目后是否写入 KaKa 规则和引擎入口文件。</span>
+              </div>
+              <select id="engineInitModeSelect">
+                <option value="ask">每次询问</option>
+                <option value="auto">自动初始化</option>
+                <option value="off">关闭</option>
+              </select>
+            </div>
+          </section>
+
+          <section class="settings-panel">
+            <div class="settings-subhead">
+              <strong>可用引擎</strong>
+              <span id="engineCount">0 个</span>
+            </div>
+            <div class="engine-list" id="settingsEngineList"></div>
+          </section>
         </div>
       </section>
     </main>

@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "dev": "electron .",
-    "start": "electron ."
+    "start": "electron .",
+    "test": "node --test"
   },
   "devDependencies": {
     "electron": "^31.7.7"
